@@ -1,0 +1,10 @@
+[package]
+name = "tvg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+byteorder = "1.4"
+num_enum = "0.5"
+thiserror = "1.0"
+libflate = "1.1"
