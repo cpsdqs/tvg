@@ -155,22 +155,23 @@ pub enum ColorData {
 enum LayerType {
     Fill = 2,
     Stroke = 3,
+    Line = 6,
 }
 
 #[derive(Debug, Clone)]
 pub struct VectorLayer {
     ty: LayerType,
-    shapes: Vec<VectorShape>,
+    segments: Vec<VectorSegment>,
 }
 
 #[derive(Debug, Clone)]
-pub struct VectorShape {
-    tags: Vec<VectorShapeData>,
+pub struct VectorSegment {
+    tags: Vec<VectorSegmentData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u32)]
-pub enum VectorShapeTag {
+pub enum VectorSegmentTag {
     /// `TGSD`: seems to contain metadata
     Tgsd = 0x54475344,
     /// `TGBP`: contains a Bézier path
@@ -181,12 +182,24 @@ pub enum VectorShapeTag {
     Tgti = 0x74475449,
 }
 
+#[derive(Clone)]
+pub struct Bytes(Vec<u8>);
+
+impl std::fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{:02x?}", byte)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
-pub enum VectorShapeData {
-    Tgsd(Vec<u8>),
-    Tgbp(Vec<u8>),
-    Tgtb(Vec<u8>),
-    Tgti(Vec<u8>),
+pub enum VectorSegmentData {
+    Tgsd(Bytes),
+    Tgbp(Bytes),
+    Tgtb(Bytes),
+    Tgti(Bytes),
 }
 
 fn read_tags<R>(mut input: R) -> Result<Vec<FileData>, ReadError>
@@ -340,6 +353,22 @@ where
 
 const LAYER_TRAILER: &[u8] = &[0x00, 0x54, 0x47, 0x52, 0x56, 0x08, 0x00, 0x00, 0x00, 0x3d, 0xdf, 0x4f, 0x8d];
 
+fn toon_boom_to_float(value: u32) -> f64 {
+    if value == 0 {
+        return 0.;
+    }
+    let negative = value & 0x80_00_00_00 != 0;
+    let exponent = (value & 0x7F_80_00_00) >> 23;
+    let f = value & 0x00_7F_FF_FF;
+    let f_bits = exponent.saturating_sub(0x79);
+    let abs_val = (2_f64).powi(exponent as i32 - 0x7f) + (f >> (23_i32 - f_bits as i32)) as f64 / 64.;
+    if negative {
+        -1. * abs_val
+    } else {
+        abs_val
+    }
+}
+
 fn read_layer_data<R>(mut input: R) -> Result<LayerData, ReadError>
 where
     R: Read,
@@ -387,13 +416,13 @@ where
 
         let layer_type = match LayerType::try_from(input.read_u16::<LE>()?) {
             Ok(ty) => ty,
-            Err(err) => todo!("error"),
+            Err(err) => todo!("error {:?}", err),
         };
 
-        let mut shapes = Vec::new();
+        let mut segments = Vec::new();
 
-        let shape_count = input.read_u32::<LE>()?;
-        for _ in 0..shape_count {
+        let segment_count = input.read_u32::<LE>()?;
+        for _ in 0..segment_count {
             let tag = input.read_u32::<byteorder::BE>()?;
             if tag != 0x54475653 {
                 // not TGVS
@@ -409,7 +438,7 @@ where
             let mut tags = Vec::new();
             loop {
                 let tag = match input.read_u32::<byteorder::BE>() {
-                    Ok(tag) => match VectorShapeTag::try_from(tag) {
+                    Ok(tag) => match VectorSegmentTag::try_from(tag) {
                         Ok(tag) => tag,
                         Err(err) => todo!("error 2"),
                     },
@@ -419,7 +448,7 @@ where
 
                 // TODO: what does it mean..........
                 match tag {
-                    VectorShapeTag::Tgsd => {
+                    VectorSegmentTag::Tgsd => {
                         let len = input.read_u32::<LE>()?;
 
                         // for some reason, TGSD is followed by an extra 0x01 byte, so we'll
@@ -428,38 +457,52 @@ where
 
                         let mut data = Vec::new();
                         input.read_to_end(&mut data)?;
-                        tags.push(VectorShapeData::Tgsd(data));
+                        tags.push(VectorSegmentData::Tgsd(Bytes(data)));
                     }
-                    VectorShapeTag::Tgbp => {
+                    VectorSegmentTag::Tgbp => {
+                        let len = input.read_u32::<LE>()?;
+                        let mut input = (&mut input).take(len as u64);
+
+                        let point_count = input.read_u32::<LE>()?;
+                        let _mystery = input.read_u8()?;
+
+                        for _ in 0..point_count {
+                            let x = toon_boom_to_float(input.read_u32::<LE>()?);
+                            let xv = x as i32;
+                            let xr = (x.fract() * 64.).abs() as u32 * 16;
+                            let y = toon_boom_to_float(input.read_u32::<LE>()?);
+                            let yv = y as i32;
+                            let yr = (y.fract() * 64.).abs() as u32 * 16;
+                            println!("x: {}r{}, y: {}r{}", xv, xr, yv, yr);
+                        }
+
+                        let mut data = Vec::new();
+                        input.read_to_end(&mut data)?;
+                        tags.push(VectorSegmentData::Tgbp(Bytes(data)));
+                    }
+                    VectorSegmentTag::Tgtb => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
                         let mut data = Vec::new();
                         input.read_to_end(&mut data)?;
-                        tags.push(VectorShapeData::Tgbp(data));
+                        tags.push(VectorSegmentData::Tgtb(Bytes(data)));
                     }
-                    VectorShapeTag::Tgtb => {
+                    VectorSegmentTag::Tgti => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
                         let mut data = Vec::new();
                         input.read_to_end(&mut data)?;
-                        tags.push(VectorShapeData::Tgtb(data));
-                    }
-                    VectorShapeTag::Tgti => {
-                        let len = input.read_u32::<LE>()?;
-                        let mut input = (&mut input).take(len as u64);
-                        let mut data = Vec::new();
-                        input.read_to_end(&mut data)?;
-                        tags.push(VectorShapeData::Tgtb(data));
+                        tags.push(VectorSegmentData::Tgtb(Bytes(data)));
                     }
                 }
             }
 
-            shapes.push(VectorShape { tags });
+            segments.push(VectorSegment { tags });
         }
 
         layers.push(VectorLayer {
             ty: layer_type,
-            shapes,
+            segments,
         });
     }
 
