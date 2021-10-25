@@ -20,6 +20,10 @@ pub enum ReadError {
     UnknownFileTag(u32),
     #[error("unknown layer tag: {0:08x?}")]
     UnknownLayerTag(u32),
+    #[error("unknown shape type: {0:04x?}")]
+    UnknownShapeType(u16),
+    #[error("unknown path tag: {0:08x?}")]
+    UnknownPathTag(u32),
     #[error("unknown palette tag: {0:08x?}")]
     UnknownPaletteTag(u32),
     #[error("unknown encoding: {0:08x?}")]
@@ -51,7 +55,10 @@ where
     let thing_1 = input.read_u32::<LE>()?;
     let thing_2 = input.read_u32::<LE>()?;
     if thing_1 != 2 || thing_2 != 1 {
-        return Err(ReadError::UnknownMystery(format!("unexpected mystery values after the TVG version: {}, {} (expected 2, 1)", thing_1, thing_2)));
+        return Err(ReadError::UnknownMystery(format!(
+            "unexpected mystery values after the TVG version: {}, {} (expected 2, 1)",
+            thing_1, thing_2
+        )));
     }
 
     let tags = read_tags(&mut input)?;
@@ -128,7 +135,7 @@ pub enum FileData {
 #[derive(Debug, Clone)]
 pub enum LayerData {
     Empty,
-    Vector(Vec<VectorLayer>),
+    Vector(Vec<VectorShape>),
 }
 #[derive(Debug, Clone)]
 pub struct PaletteData {
@@ -152,26 +159,26 @@ pub enum ColorData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u16)]
-enum LayerType {
+enum ShapeType {
     Fill = 2,
     Stroke = 3,
     Line = 6,
 }
 
 #[derive(Debug, Clone)]
-pub struct VectorLayer {
-    ty: LayerType,
-    segments: Vec<VectorSegment>,
+pub struct VectorShape {
+    ty: ShapeType,
+    paths: Vec<Path>,
 }
 
 #[derive(Debug, Clone)]
-pub struct VectorSegment {
-    tags: Vec<VectorSegmentData>,
+pub struct Path {
+    tags: Vec<PathData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u32)]
-pub enum VectorSegmentTag {
+pub enum PathTag {
     /// `TGSD`: seems to contain metadata
     Tgsd = 0x54475344,
     /// `TGBP`: contains a Bézier path
@@ -195,11 +202,25 @@ impl std::fmt::Debug for Bytes {
 }
 
 #[derive(Debug, Clone)]
-pub enum VectorSegmentData {
-    Tgsd(Bytes),
-    Tgbp(Bytes),
+pub enum PathData {
+    Info(PathInfo),
+    Path(PathCurve),
     Tgtb(Bytes),
     Tgti(Bytes),
+}
+
+#[derive(Debug, Clone)]
+pub struct PathInfo {
+    color_id: Option<u64>,
+}
+
+pub type Point = (f64, f64);
+
+#[derive(Debug, Clone)]
+pub enum PathCurve {
+    Line(Point, Point),
+    CubicBezier(Point, Point, Point, Point),
+    PolyCubicBezier(Point, Vec<(Point, Point, Point)>),
 }
 
 fn read_tags<R>(mut input: R) -> Result<Vec<FileData>, ReadError>
@@ -232,7 +253,10 @@ where
             // mystery thing
             let thing = reader.read_u32::<LE>()?;
             if thing != 1 {
-                return Err(ReadError::UnknownMystery(format!("unexpected CERT header bytes: {} (expected 1)", thing)));
+                return Err(ReadError::UnknownMystery(format!(
+                    "unexpected CERT header bytes: {} (expected 1)",
+                    thing
+                )));
             }
             let cert_len = reader.read_u32::<LE>()?;
 
@@ -254,7 +278,10 @@ where
             let mut buf_read = io::BufReader::new(io::Cursor::new(data));
             let thing = buf_read.read_u32::<LE>()?;
             if thing != 2 {
-                return Err(ReadError::UnknownMystery(format!("unexpected CREA value: {} (expected 2)", thing)));
+                return Err(ReadError::UnknownMystery(format!(
+                    "unexpected CREA value: {} (expected 2)",
+                    thing
+                )));
             }
             // TODO: check EOF?
             Ok(FileData::Crea(thing))
@@ -351,7 +378,9 @@ where
     }
 }
 
-const LAYER_TRAILER: &[u8] = &[0x00, 0x54, 0x47, 0x52, 0x56, 0x08, 0x00, 0x00, 0x00, 0x3d, 0xdf, 0x4f, 0x8d];
+const LAYER_TRAILER: &[u8] = &[
+    0x00, 0x54, 0x47, 0x52, 0x56, 0x08, 0x00, 0x00, 0x00, 0x3d, 0xdf, 0x4f, 0x8d,
+];
 
 fn toon_boom_to_float(value: u32) -> f64 {
     if value == 0 {
@@ -361,9 +390,11 @@ fn toon_boom_to_float(value: u32) -> f64 {
     let exponent = (value & 0x7F_80_00_00) >> 23;
     let f = value & 0x00_7F_FF_FF;
     let f_bits = exponent.saturating_sub(0x79);
-    let abs_val = (2_f64).powi(exponent as i32 - 0x7f) + (f >> (23_i32 - f_bits as i32)) as f64 / 64.;
+    let base_val = (2_f64).powi(exponent as i32 - 0x7f);
+    let frac_val = (f >> 23_u32.saturating_sub(f_bits)) as f64 / 64.;
+    let abs_val = base_val + frac_val;
     if negative {
-        -1. * abs_val
+        -abs_val
     } else {
         abs_val
     }
@@ -395,13 +426,13 @@ where
 
     let mut layers = Vec::new();
 
-    let layer_count = input.read_u32::<LE>()?;
-    for _ in 0..layer_count {
-        let layer_ty = input.read_u32::<LE>()?;
-        if layer_ty != 2 {
+    let shape_count = input.read_u32::<LE>()?;
+    for _ in 0..shape_count {
+        let shape_ty = input.read_u32::<LE>()?;
+        if shape_ty != 2 {
             return Err(ReadError::UnknownMystery(format!(
                 "unexpected layer type: {:?}",
-                layer_ty
+                shape_ty
             )));
         }
         let tgly = input.read_u32::<byteorder::BE>()?;
@@ -411,23 +442,28 @@ where
                 tgly
             )));
         }
-        let layer_len = input.read_u32::<LE>()?;
-        let mut input = (&mut input).take(layer_len as u64);
+        let shape_len = input.read_u32::<LE>()?;
+        let mut input = (&mut input).take(shape_len as u64);
 
-        let layer_type = match LayerType::try_from(input.read_u16::<LE>()?) {
+        let shape_type = match ShapeType::try_from(input.read_u16::<LE>()?) {
             Ok(ty) => ty,
-            Err(err) => todo!("error {:?}", err),
+            Err(err) => {
+                let mut data = Vec::new();
+                input.read_to_end(&mut data)?;
+                println!("{:?}", Bytes(data));
+                return Err(ReadError::UnknownShapeType(err.number))
+            },
         };
 
-        let mut segments = Vec::new();
+        let mut paths = Vec::new();
 
-        let segment_count = input.read_u32::<LE>()?;
-        for _ in 0..segment_count {
+        let path_count = input.read_u32::<LE>()?;
+        for _ in 0..path_count {
             let tag = input.read_u32::<byteorder::BE>()?;
             if tag != 0x54475653 {
                 // not TGVS
                 return Err(ReadError::UnknownMystery(format!(
-                    "unexpected layer shape tag: {:08x?}",
+                    "unexpected shape path tag: {:08x?}",
                     tag
                 )));
             }
@@ -438,78 +474,165 @@ where
             let mut tags = Vec::new();
             loop {
                 let tag = match input.read_u32::<byteorder::BE>() {
-                    Ok(tag) => match VectorSegmentTag::try_from(tag) {
+                    Ok(tag) => match PathTag::try_from(tag) {
                         Ok(tag) => tag,
-                        Err(err) => todo!("error 2"),
+                        Err(err) => return Err(ReadError::UnknownPathTag(err.number)),
                     },
                     Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
                     Err(err) => return Err(ReadError::Io(err)),
                 };
 
-                // TODO: what does it mean..........
                 match tag {
-                    VectorSegmentTag::Tgsd => {
+                    PathTag::Tgsd => {
                         let len = input.read_u32::<LE>()?;
-
                         // for some reason, TGSD is followed by an extra 0x01 byte, so we'll
                         // include it here.
                         let mut input = (&mut input).take(len as u64 + 1);
 
-                        let mut data = Vec::new();
-                        input.read_to_end(&mut data)?;
-                        tags.push(VectorSegmentData::Tgsd(Bytes(data)));
+                        // TODO: find out what all the other stuff means (“TGCOB”?)
+                        let color_id = match input.read_u8()? {
+                            0x04 => {
+                                // stroke
+                                input.read_u32::<LE>()?;
+                                Some(input.read_u64::<LE>()?)
+                            }
+                            0x00 => {
+                                // fill
+                                match input.read_u8()? {
+                                    0x00 => None,
+                                    0x01 => {
+                                        let color_pos = len - 24;
+                                        for _ in 2..color_pos {
+                                            input.read_u8()?;
+                                        }
+                                        Some(input.read_u64::<LE>()?)
+                                    }
+                                    t => {
+                                        return Err(ReadError::UnknownMystery(format!(
+                                            "unexpected second TGSD byte after 0x00: {}",
+                                            t
+                                        )))
+                                    }
+                                }
+                            }
+                            t => {
+                                return Err(ReadError::UnknownMystery(format!(
+                                    "unexpected first TGSD byte: {}",
+                                    t
+                                )))
+                            }
+                        };
+
+                        input.read_to_end(&mut Vec::new())?;
+
+                        tags.push(PathData::Info(PathInfo { color_id }));
                     }
-                    VectorSegmentTag::Tgbp => {
+                    PathTag::Tgbp => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
 
                         let point_count = input.read_u32::<LE>()?;
-                        let _mystery = input.read_u8()?;
+
+                        enum CurveType {
+                            Line,
+                            CubicBezier,
+                            PolyCubicBezier,
+                        }
+
+                        let curve_type = match input.read_u8()? {
+                            0x3 => CurveType::Line,
+                            0x9 => CurveType::CubicBezier,
+                            0x49 => {
+                                // Polybézier
+                                // there's weird data before the points of variable length.
+                                // it looks something like `92 24 09` or `92 24 49 92`.
+                                // we'll just skip it
+                                let weird_data_len = len - 5 - point_count * 8;
+                                for _ in 0..weird_data_len {
+                                    input.read_u8()?;
+                                }
+                                CurveType::PolyCubicBezier
+                            }
+                            t => {
+                                return Err(ReadError::UnknownMystery(format!(
+                                    "unknown vector curve type {:02x?}",
+                                    t
+                                )))
+                            }
+                        };
+
+                        let mut points = Vec::new();
 
                         for _ in 0..point_count {
                             let x = toon_boom_to_float(input.read_u32::<LE>()?);
-                            let xv = x as i32;
-                            let xr = (x.fract() * 64.).abs() as u32 * 16;
                             let y = toon_boom_to_float(input.read_u32::<LE>()?);
-                            let yv = y as i32;
-                            let yr = (y.fract() * 64.).abs() as u32 * 16;
-                            println!("x: {}r{}, y: {}r{}", xv, xr, yv, yr);
+                            points.push((x, y));
                         }
 
-                        let mut data = Vec::new();
-                        input.read_to_end(&mut data)?;
-                        tags.push(VectorSegmentData::Tgbp(Bytes(data)));
+                        let curve = match curve_type {
+                            CurveType::Line => {
+                                if points.len() != 2 {
+                                    return Err(ReadError::UnknownMystery(format!("expected line segment to have 2 points but got {} point(s)", points.len())));
+                                }
+                                PathCurve::Line(points[0], points[1])
+                            }
+                            CurveType::CubicBezier => {
+                                if points.len() != 4 {
+                                    return Err(ReadError::UnknownMystery(format!("expected cubic bézier segment to have 4 points but got {} point(s)", points.len())));
+                                }
+                                PathCurve::CubicBezier(points[0], points[1], points[2], points[3])
+                            }
+                            CurveType::PolyCubicBezier => {
+                                if points.is_empty() || (points.len().saturating_sub(1)) % 3 != 0 {
+                                    return Err(ReadError::UnknownMystery(format!("expected poly-cubic bézier segment to have 3n+1 points but got {} point(s)", points.len())));
+                                }
+                                let first = points[0];
+                                let mut curves = Vec::new();
+                                for i in 0..(points.len() - 1) / 3 {
+                                    let a = points[i * 3 + 1];
+                                    let b = points[i * 3 + 2];
+                                    let c = points[i * 3 + 3];
+                                    curves.push((a, b, c));
+                                }
+                                PathCurve::PolyCubicBezier(first, curves)
+                            }
+                        };
+
+                        tags.push(PathData::Path(curve));
                     }
-                    VectorSegmentTag::Tgtb => {
+                    PathTag::Tgtb => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
                         let mut data = Vec::new();
                         input.read_to_end(&mut data)?;
-                        tags.push(VectorSegmentData::Tgtb(Bytes(data)));
+                        tags.push(PathData::Tgtb(Bytes(data)));
                     }
-                    VectorSegmentTag::Tgti => {
+                    PathTag::Tgti => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
                         let mut data = Vec::new();
                         input.read_to_end(&mut data)?;
-                        tags.push(VectorSegmentData::Tgtb(Bytes(data)));
+                        tags.push(PathData::Tgtb(Bytes(data)));
                     }
                 }
             }
 
-            segments.push(VectorSegment { tags });
+            paths.push(Path { tags });
         }
 
-        layers.push(VectorLayer {
-            ty: layer_type,
-            segments,
+        layers.push(VectorShape {
+            ty: shape_type,
+            paths,
         });
     }
 
     let mut trailer = [0; LAYER_TRAILER.len()];
     input.read_exact(&mut trailer)?;
     if trailer != LAYER_TRAILER {
-        return Err(ReadError::UnknownMystery(format!("unexpected layer trailer: {:02?}", trailer)));
+        return Err(ReadError::UnknownMystery(format!(
+            "unexpected layer trailer: {:02?}",
+            trailer
+        )));
     }
 
     Ok(LayerData::Vector(layers))
