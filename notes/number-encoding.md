@@ -108,7 +108,7 @@ if you stare at the data long enough you can make out the pattern:
 - => 8 bits “exponent”
     - (`3C8`) `011 1100 1` spans [1/64, 2/64[ / 0 bits value
     - (`3D0`) `011 1101 0` spans [2/64, 4/64[ / 1 bit
-    - (`3D8`) `011 1101 0` spans [4/64, 8/64[ / 2 bits
+    - (`3D8`) `011 1101 1` spans [4/64, 8/64[ / 2 bits
     - (`3E0`) `011 1110 0` spans [8/64, 16/64[ / 3 bits
     - (`3E8`) `011 1110 1` spans [16/64, 32/64[ / 4 bits
     - (`3F0`) `011 1111 0` spans [32/64, 1[ / 5 bits
