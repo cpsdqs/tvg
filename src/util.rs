@@ -32,6 +32,9 @@ where
     }
 }
 
+// TODO: it seems it's possible to have sub-quantum values
+// (used for stroke weight data)
+
 /// A Toon Boom quantized value.
 ///
 /// # Format
@@ -42,7 +45,7 @@ where
 /// n / 64 for some integer n.
 ///
 /// Numbers are 32-bit values composed from an MSB 1 bit sign, an 8 bit exponent,
-/// and a variable length fractional part, followed by zero bytes until the LSB.
+/// and a variable length fractional part, followed by zero bits until the LSB.
 ///
 /// The exponent specifies both the current range of values and the length of the fractional value.
 ///
@@ -132,6 +135,10 @@ impl TbQuant {
     }
 
     pub fn as_f64(&self) -> f64 {
+        if self.exp == 0 && self.frac == 0 {
+            return 0.;
+        }
+
         let base_val = (2_f64).powi(self.exp as i32 - 0x7f);
         let frac_val = self.frac as f64 * Self::POINT_QUANTUM;
         let abs_val = base_val + frac_val;
@@ -162,25 +169,6 @@ fn test_tb_quant() {
     let float = tbq.as_f64();
     let tbq2 = TbQuant::from_f64(float);
     assert_eq!(tbq, tbq2);
-}
-
-#[deprecated]
-pub fn toon_boom_to_float(value: u32) -> f64 {
-    if value == 0 {
-        return 0.;
-    }
-    let negative = value & 0x80_00_00_00 != 0;
-    let exponent = (value & 0x7F_80_00_00) >> 23;
-    let f = value & 0x00_7F_FF_FF;
-    let f_bits = exponent.saturating_sub(0x79);
-    let base_val = (2_f64).powi(exponent as i32 - 0x7f);
-    let frac_val = (f >> 23_u32.saturating_sub(f_bits)) as f64 / 64.;
-    let abs_val = base_val + frac_val;
-    if negative {
-        -abs_val
-    } else {
-        abs_val
-    }
 }
 
 /// Contains byte data (with appropriate debug formatting).

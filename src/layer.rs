@@ -13,9 +13,12 @@ pub enum LayerData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum ShapeType {
+    Unknown0 = 0,
+    Unknown1 = 1,
     Fill = 2,
     Stroke = 3,
     Line = 6,
+    Unknown7 = 7,
 }
 
 #[derive(Debug, Clone)]
@@ -31,14 +34,14 @@ pub struct ShapeComponent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u32)]
-pub enum PathTag {
+pub enum ShapeComponentTag {
     /// `TGSD`: seems to contain metadata
     Tgsd = 0x54475344,
     /// `TGBP`: contains a Bézier path
     Tgbp = 0x54474250,
-    /// `TGTB`: seems to be related to the pencil
+    /// `tGTB`: seems to be related to the pencil
     Tgtb = 0x74475442,
-    /// `TGTI`: seems to be related to the pencil
+    /// `tGTI`: seems to be related to the pencil
     Tgti = 0x74475449,
 }
 
@@ -46,7 +49,7 @@ pub enum PathTag {
 pub enum ShapeComponentData {
     Info(ComponentInfo),
     Path(Path),
-    Tgtb(Bytes),
+    Tgtb(StrokeWeight),
     Tgti(Bytes),
 }
 
@@ -54,6 +57,7 @@ pub enum ShapeComponentData {
 #[repr(u8)]
 pub enum ComponentType {
     Fill = 0,
+    Unknown1 = 1,
     Stroke = 2,
     Pencil = 4,
 }
@@ -172,6 +176,43 @@ impl Path {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct StrokeWeight {
+    points: Vec<StrokeWeightPoint>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrokeWeightPoint {
+    /// The location on the entire curve, from 0 to 1.
+    location: TbQuant,
+    /// The left weight side (in the drawing direction)
+    left: StrokeWeightPointSide,
+    /// The right weight side (in the drawing direction)
+    right: StrokeWeightPointSide,
+}
+
+/// One side of a stroke weight point.
+///
+/// The offset and the Y coordinate of control points specify a distance from the center line.
+///
+/// The X coordinate of control points ranges from 0 to 1, where 0 is directly on the current weight
+/// point and 1 is directly on the next weight point in that particular direction.
+///
+/// If this is an end point, however, things change:
+/// the control point in the direction of the end cap (e.g. control_back at the beginning) is now
+/// connected to the weight point on the other side of the *same* weight point.
+/// The X coordinate is now 1 if the control point is on the other side of the stroke, and the Y
+/// coordinate goes in the direction of the end cap.
+#[derive(Debug, Clone)]
+pub struct StrokeWeightPointSide {
+    /// The offset from the center line.
+    offset: TbQuant,
+    /// The bézier control point in the backwards direction.
+    control_back: Point,
+    /// The bézier control point in the forwards direction.
+    control_fwd: Point,
+}
+
 // what does this mean?
 const LAYER_TRAILER: &[u8] = &[
     0x00, 0x54, 0x47, 0x52, 0x56, 0x08, 0x00, 0x00, 0x00, 0x3d, 0xdf, 0x4f, 0x8d,
@@ -208,7 +249,7 @@ where
     let mut shapes = Vec::new();
 
     let shape_count = input.read_u32::<LE>()?;
-    for _ in 0..shape_count {
+    for i in 0..shape_count {
         let layer_ty = input.read_u32::<LE>()?;
         if layer_ty != 2 {
             return Err(ReadError::UnknownMystery(format!(
@@ -231,19 +272,20 @@ where
             Err(err) => {
                 let mut data = Vec::new();
                 input.read_to_end(&mut data)?;
+                println!("{:?}", Bytes(data));
                 return Err(ReadError::UnknownShapeType(err.number));
             }
         };
 
         let mut paths = Vec::new();
 
-        let path_count = input.read_u32::<LE>()?;
-        for _ in 0..path_count {
+        let component_count = input.read_u32::<LE>()?;
+        for i in 0..component_count {
             let tag = input.read_u32::<byteorder::BE>()?;
             if tag != 0x54475653 {
                 // not TGVS
                 return Err(ReadError::UnknownMystery(format!(
-                    "unexpected shape tag: {:08x?}",
+                    "unexpected shape component tag: {:08x?}",
                     tag
                 )));
             }
@@ -254,87 +296,160 @@ where
             let mut tags = Vec::new();
             loop {
                 let tag = match input.read_u32::<byteorder::BE>() {
-                    Ok(tag) => match PathTag::try_from(tag) {
+                    Ok(tag) => match ShapeComponentTag::try_from(tag) {
                         Ok(tag) => tag,
-                        Err(err) => return Err(ReadError::UnknownPathTag(err.number)),
+                        Err(err) => return Err(ReadError::UnknownComponentTag(err.number)),
                     },
                     Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
                     Err(err) => return Err(ReadError::Io(err)),
                 };
 
                 match tag {
-                    PathTag::Tgsd => {
+                    ShapeComponentTag::Tgsd => {
                         let len = input.read_u32::<LE>()?;
-                        // for some reason, TGSD is followed by an extra 0x01 byte, so we'll
-                        // include it here.
-                        let mut input = (&mut input).take(len as u64 + 1);
+                        {
+                            let mut input = (&mut input).take(len as u64);
 
-                        let path_type = ComponentType::try_from(input.read_u8()?)
-                            .map_err(|err| ReadError::UnknownPathType(err.number))?;
+                            let component_type = ComponentType::try_from(input.read_u8()?)
+                                .map_err(|err| ReadError::UnknownComponentType(err.number))?;
 
-                        // TODO: find out what all the other stuff means (“TGCOB”?)
-                        let color_id = match path_type {
-                            ComponentType::Fill => {
-                                // fill
-                                let color_id = match input.read_u8()? {
-                                    0x00 => None,
-                                    0x01 => {
-                                        let color_pos = len - 24;
-                                        for _ in 2..color_pos {
-                                            input.read_u8()?;
+                            // TODO: find out what all the other stuff means (“TGCO”?)
+                            let color_id = match component_type {
+                                ComponentType::Fill => {
+                                    // fill
+                                    let color_id = match input.read_u8()? {
+                                        0x00 => None,
+                                        0x01 => {
+                                            let color_pos = len - 24;
+                                            for _ in 2..color_pos {
+                                                input.read_u8()?;
+                                            }
+                                            Some(input.read_u64::<LE>()?)
                                         }
-                                        Some(input.read_u64::<LE>()?)
-                                    }
-                                    t => {
-                                        return Err(ReadError::UnknownMystery(format!(
-                                            "unexpected second TGSD byte after 0x00: {}",
-                                            t
-                                        )))
-                                    }
-                                };
-                                color_id
-                            }
-                            ComponentType::Stroke => {
-                                // stroke (the invisible kind)
-                                None
-                            }
-                            ComponentType::Pencil => {
-                                // pencil stroke
-                                input.read_u32::<LE>()?;
-                                Some(input.read_u64::<LE>()?)
-                            }
+                                        t => {
+                                            return Err(ReadError::UnknownMystery(format!(
+                                                "unexpected second TGSD byte after 0x00: {}",
+                                                t
+                                            )))
+                                        }
+                                    };
+                                    color_id
+                                }
+                                ComponentType::Unknown1 => None,
+                                ComponentType::Stroke => {
+                                    // stroke (the invisible kind)
+                                    None
+                                }
+                                ComponentType::Pencil => {
+                                    // pencil stroke
+                                    input.read_u32::<LE>()?;
+                                    Some(input.read_u64::<LE>()?)
+                                }
+                            };
+
+                            // FIXME: is there any interesting data here, ever?
+                            // seems to just be a bunch of 0 bytes, usually...
+                            input.read_to_end(&mut Vec::new())?;
+
+                            tags.push(ShapeComponentData::Info(ComponentInfo {
+                                ty: component_type,
+                                color_id,
+                            }));
                         };
 
-                        // FIXME: is there any interesting data here, ever?
-                        // seems to just be a bunch of 0 bytes, usually...
-                        // (also the extra 0x01 byte)
-                        input.read_to_end(&mut Vec::new())?;
-
-                        tags.push(ShapeComponentData::Info(ComponentInfo {
-                            ty: path_type,
-                            color_id,
-                        }));
+                        // for some reason, TGSD is always followed by an extra byte that indicates
+                        // how to proceed
+                        let extra_byte = input.read_u8()?;
+                        match extra_byte {
+                            0 => {
+                                // stop
+                                let trailer = input.read_u32::<LE>()?;
+                                println!("trailer: {:08x?}", trailer);
+                                break;
+                            }
+                            1 => {
+                                // normal case: continue reading
+                            }
+                            n => {
+                                return Err(ReadError::UnknownMystery(format!(
+                                    "unexpected byte that follows TGSD: {:02x?}",
+                                    n
+                                )))
+                            }
+                        }
                     }
-                    PathTag::Tgbp => {
+                    ShapeComponentTag::Tgbp => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
                         tags.push(ShapeComponentData::Path(Path::read(&mut input)?));
                     }
-                    PathTag::Tgtb => {
+                    ShapeComponentTag::Tgtb => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
-                        // TODO
-                        let mut data = Vec::new();
-                        input.read_to_end(&mut data)?;
-                        tags.push(ShapeComponentData::Tgtb(Bytes(data)));
+
+                        let header: [u8; 7] = [0x01, 0xff, 0xff, 0xff, 0xff, 0xcf, 0x00];
+                        let mut header_read = [0; 7];
+                        input.read_exact(&mut header_read)?;
+                        if header != header_read {
+                            return Err(ReadError::UnknownMystery(format!(
+                                "unexpected tGTB header {:02x?}",
+                                header_read,
+                            )));
+                        }
+
+                        let mut point_count = input.read_u32::<LE>()?;
+                        let mut points = Vec::new();
+
+                        for _ in 0..point_count {
+                            let loc = TbQuant::decode(input.read_u32::<LE>()?);
+                            let off_l = TbQuant::decode(input.read_u32::<LE>()?);
+                            let lb_x = TbQuant::decode(input.read_u32::<LE>()?);
+                            let lb_y = TbQuant::decode(input.read_u32::<LE>()?);
+                            let lf_x = TbQuant::decode(input.read_u32::<LE>()?);
+                            let lf_y = TbQuant::decode(input.read_u32::<LE>()?);
+                            let off_r = TbQuant::decode(input.read_u32::<LE>()?);
+                            let rb_x = TbQuant::decode(input.read_u32::<LE>()?);
+                            let rb_y = TbQuant::decode(input.read_u32::<LE>()?);
+                            let rf_x = TbQuant::decode(input.read_u32::<LE>()?);
+                            let rf_y = TbQuant::decode(input.read_u32::<LE>()?);
+
+                            points.push(StrokeWeightPoint {
+                                location: loc,
+                                left: StrokeWeightPointSide {
+                                    offset: off_l,
+                                    control_back: (lb_x, lb_y),
+                                    control_fwd: (lf_x, lf_y),
+                                },
+                                right: StrokeWeightPointSide {
+                                    offset: off_r,
+                                    control_back: (rb_x, rb_y),
+                                    control_fwd: (rf_x, rf_y),
+                                },
+                            });
+                        }
+
+                        let trailer: [u8; 29] = [
+                            00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
+                            00, 0x80, 0x3F, 00, 00, 00, 00, 00, 00, 00, 00,
+                        ];
+                        let mut trailer_read = [0; 29];
+                        input.read_exact(&mut trailer_read)?;
+                        if trailer != trailer_read {
+                            return Err(ReadError::UnknownMystery(format!(
+                                "unexpected tGTB trailer {:02x?}",
+                                trailer_read,
+                            )));
+                        }
+
+                        tags.push(ShapeComponentData::Tgtb(StrokeWeight { points }));
                     }
-                    PathTag::Tgti => {
+                    ShapeComponentTag::Tgti => {
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
                         // TODO
                         let mut data = Vec::new();
                         input.read_to_end(&mut data)?;
-                        tags.push(ShapeComponentData::Tgtb(Bytes(data)));
+                        tags.push(ShapeComponentData::Tgti(Bytes(data)));
                     }
                 }
             }

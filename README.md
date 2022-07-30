@@ -5,8 +5,10 @@ The tvg format is unfortunately not documented, so this is the result of a whole
 Can currently decode:
 
 - Misc. file metadata
-- Color palettes
+- Color palettes:
+    - RGBA colors
 - Layer data:
     - Shape colors
     - Fill shapes (shapes created using the brush tool or the fill bucket)
-    - Stroke center lines (thickness remains a mystery)
+    - Stroke center lines
+    - Some stroke thickness data
