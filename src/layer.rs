@@ -39,7 +39,7 @@ pub enum ShapeComponentTag {
     Tgsd = 0x54475344,
     /// `TGBP`: contains a Bézier path
     Tgbp = 0x54474250,
-    /// `tGTB`: seems to be related to the pencil
+    /// `tGTB`: pencil thickness
     Tgtb = 0x74475442,
     /// `tGTI`: seems to be related to the pencil
     Tgti = 0x74475449,
@@ -49,7 +49,7 @@ pub enum ShapeComponentTag {
 pub enum ShapeComponentData {
     Info(ComponentInfo),
     Path(Path),
-    Tgtb(StrokeWeight),
+    Thickness(StrokeThickness),
     Tgti(Bytes),
 }
 
@@ -151,8 +151,8 @@ impl Path {
 
         macro_rules! read_point {
             () => {{
-                let x = TbQuant::decode(input.read_u32::<LE>()?);
-                let y = TbQuant::decode(input.read_u32::<LE>()?);
+                let x = TbQuant(input.read_f32::<LE>()?);
+                let y = TbQuant(input.read_f32::<LE>()?);
                 (x, y)
             }};
         }
@@ -177,40 +177,40 @@ impl Path {
 }
 
 #[derive(Debug, Clone)]
-pub struct StrokeWeight {
-    points: Vec<StrokeWeightPoint>,
+pub struct StrokeThickness {
+    points: Vec<StrokeThicknessPoint>,
 }
 
 #[derive(Debug, Clone)]
-pub struct StrokeWeightPoint {
+pub struct StrokeThicknessPoint {
     /// The location on the entire curve, from 0 to 1.
-    location: TbQuant,
-    /// The left weight side (in the drawing direction)
-    left: StrokeWeightPointSide,
-    /// The right weight side (in the drawing direction)
-    right: StrokeWeightPointSide,
+    pub loc: TbQuant,
+    /// The left thickness side (in the drawing direction)
+    pub left: StrokeThicknessSide,
+    /// The right thickness side (in the drawing direction)
+    pub right: StrokeThicknessSide,
 }
 
-/// One side of a stroke weight point.
+/// One side of a stroke thickness point.
 ///
 /// The offset and the Y coordinate of control points specify a distance from the center line.
 ///
-/// The X coordinate of control points ranges from 0 to 1, where 0 is directly on the current weight
-/// point and 1 is directly on the next weight point in that particular direction.
+/// The X coordinate of control points ranges from 0 to 1, where 0 is directly on the current
+/// thickness point and 1 is directly on the next thickness point in that particular direction.
 ///
 /// If this is an end point, however, things change:
 /// the control point in the direction of the end cap (e.g. control_back at the beginning) is now
-/// connected to the weight point on the other side of the *same* weight point.
+/// connected to the thickness point on the other side of the *same* thickness point.
 /// The X coordinate is now 1 if the control point is on the other side of the stroke, and the Y
 /// coordinate goes in the direction of the end cap.
 #[derive(Debug, Clone)]
-pub struct StrokeWeightPointSide {
+pub struct StrokeThicknessSide {
     /// The offset from the center line.
-    offset: TbQuant,
+    pub offset: TbQuant,
     /// The bézier control point in the backwards direction.
-    control_back: Point,
+    pub ctrl_back: Point,
     /// The bézier control point in the forwards direction.
-    control_fwd: Point,
+    pub ctrl_fwd: Point,
 }
 
 // what does this mean?
@@ -249,7 +249,7 @@ where
     let mut shapes = Vec::new();
 
     let shape_count = input.read_u32::<LE>()?;
-    for i in 0..shape_count {
+    for _ in 0..shape_count {
         let layer_ty = input.read_u32::<LE>()?;
         if layer_ty != 2 {
             return Err(ReadError::UnknownMystery(format!(
@@ -280,7 +280,7 @@ where
         let mut paths = Vec::new();
 
         let component_count = input.read_u32::<LE>()?;
-        for i in 0..component_count {
+        for _ in 0..component_count {
             let tag = input.read_u32::<byteorder::BE>()?;
             if tag != 0x54475653 {
                 // not TGVS
@@ -314,6 +314,7 @@ where
                                 .map_err(|err| ReadError::UnknownComponentType(err.number))?;
 
                             // TODO: find out what all the other stuff means (“TGCO”?)
+                            // there may be information about the graph structure in this tag
                             let color_id = match component_type {
                                 ComponentType::Fill => {
                                     // fill
@@ -387,61 +388,81 @@ where
                         let len = input.read_u32::<LE>()?;
                         let mut input = (&mut input).take(len as u64);
 
-                        let header: [u8; 7] = [0x01, 0xff, 0xff, 0xff, 0xff, 0xcf, 0x00];
-                        let mut header_read = [0; 7];
+                        match input.read_u8()? {
+                            0x01 => (),
+                            byte => {
+                                return Err(ReadError::UnknownMystery(format!(
+                                    "unexpected tGTB first byte: {:02x?} (expected 01)",
+                                    byte,
+                                )))
+                            }
+                        }
+
+                        println!("tGTB second byte: {:02x?}", input.read_u8()?);
+
+                        let header: [u8; 5] = [0xff, 0xff, 0xff, 0xcf, 0x00];
+                        let mut header_read = [0; 5];
                         input.read_exact(&mut header_read)?;
                         if header != header_read {
+                            let mut rest = Vec::new();
+                            input.read_to_end(&mut rest)?;
+
                             return Err(ReadError::UnknownMystery(format!(
-                                "unexpected tGTB header {:02x?}",
+                                "unexpected tGTB header {:02x?} (rest: {:?})",
                                 header_read,
+                                Bytes(rest),
                             )));
                         }
 
-                        let mut point_count = input.read_u32::<LE>()?;
+                        let point_count = input.read_u32::<LE>()?;
                         let mut points = Vec::new();
 
                         for _ in 0..point_count {
-                            let loc = TbQuant::decode(input.read_u32::<LE>()?);
-                            let off_l = TbQuant::decode(input.read_u32::<LE>()?);
-                            let lb_x = TbQuant::decode(input.read_u32::<LE>()?);
-                            let lb_y = TbQuant::decode(input.read_u32::<LE>()?);
-                            let lf_x = TbQuant::decode(input.read_u32::<LE>()?);
-                            let lf_y = TbQuant::decode(input.read_u32::<LE>()?);
-                            let off_r = TbQuant::decode(input.read_u32::<LE>()?);
-                            let rb_x = TbQuant::decode(input.read_u32::<LE>()?);
-                            let rb_y = TbQuant::decode(input.read_u32::<LE>()?);
-                            let rf_x = TbQuant::decode(input.read_u32::<LE>()?);
-                            let rf_y = TbQuant::decode(input.read_u32::<LE>()?);
+                            let loc = TbQuant(input.read_f32::<LE>()?);
+                            let off_l = TbQuant(input.read_f32::<LE>()?);
+                            let lb_x = TbQuant(input.read_f32::<LE>()?);
+                            let lb_y = TbQuant(input.read_f32::<LE>()?);
+                            let lf_x = TbQuant(input.read_f32::<LE>()?);
+                            let lf_y = TbQuant(input.read_f32::<LE>()?);
+                            let off_r = TbQuant(input.read_f32::<LE>()?);
+                            let rb_x = TbQuant(input.read_f32::<LE>()?);
+                            let rb_y = TbQuant(input.read_f32::<LE>()?);
+                            let rf_x = TbQuant(input.read_f32::<LE>()?);
+                            let rf_y = TbQuant(input.read_f32::<LE>()?);
 
-                            points.push(StrokeWeightPoint {
-                                location: loc,
-                                left: StrokeWeightPointSide {
+                            points.push(StrokeThicknessPoint {
+                                loc,
+                                left: StrokeThicknessSide {
                                     offset: off_l,
-                                    control_back: (lb_x, lb_y),
-                                    control_fwd: (lf_x, lf_y),
+                                    ctrl_back: (lb_x, lb_y),
+                                    ctrl_fwd: (lf_x, lf_y),
                                 },
-                                right: StrokeWeightPointSide {
+                                right: StrokeThicknessSide {
                                     offset: off_r,
-                                    control_back: (rb_x, rb_y),
-                                    control_fwd: (rf_x, rf_y),
+                                    ctrl_back: (rb_x, rb_y),
+                                    ctrl_fwd: (rf_x, rf_y),
                                 },
                             });
                         }
 
                         let trailer: [u8; 29] = [
-                            00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
-                            00, 0x80, 0x3F, 00, 00, 00, 00, 00, 00, 00, 00,
+                            00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
+                            // this seems to be a float value that *can* change
+                            // but what does it mean...
+                            00, 00, 0x80, 0x3F,
+                            00, 00, 00, 00, 00, 00, 00, 00,
                         ];
                         let mut trailer_read = [0; 29];
                         input.read_exact(&mut trailer_read)?;
                         if trailer != trailer_read {
-                            return Err(ReadError::UnknownMystery(format!(
+                            println!("unexpected tGTB trailer {:?}", Bytes(trailer_read.to_vec()));
+                            /* return Err(ReadError::UnknownMystery(format!(
                                 "unexpected tGTB trailer {:02x?}",
                                 trailer_read,
-                            )));
+                            ))); */
                         }
 
-                        tags.push(ShapeComponentData::Tgtb(StrokeWeight { points }));
+                        tags.push(ShapeComponentData::Thickness(StrokeThickness { points }));
                     }
                     ShapeComponentTag::Tgti => {
                         let len = input.read_u32::<LE>()?;
