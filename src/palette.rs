@@ -103,7 +103,7 @@ where
                     tags.push(ColorData::ColorId {
                         id: color_id,
                         name,
-                        project,
+                        palette: project,
                     });
                 }
                 Err(err) => {

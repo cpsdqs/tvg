@@ -134,7 +134,7 @@ pub enum ColorData {
     ColorId {
         id: u64,
         name: String,
-        project: String,
+        palette: String,
     },
 }
 

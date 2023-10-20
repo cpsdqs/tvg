@@ -32,28 +32,6 @@ where
     }
 }
 
-// TODO: it seems it's possible to have sub-quantum values
-// (used for stroke weight data)
-
-/// A Toon Boom quantized value.
-#[derive(Clone, Copy, PartialEq)]
-pub struct TbQuant(pub f32);
-
-impl TbQuant {
-    pub fn as_f32(&self) -> f32 {
-        self.0
-    }
-}
-
-impl std::fmt::Debug for TbQuant {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let float = self.as_f32();
-        let int_part = float.trunc();
-        let frac_part = float.fract().abs() * 1024.;
-        write!(f, "{}r{}", int_part, frac_part)
-    }
-}
-
 /// Contains byte data (with appropriate debug formatting).
 #[derive(Clone)]
 pub struct Bytes(pub Vec<u8>);

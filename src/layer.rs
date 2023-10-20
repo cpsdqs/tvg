@@ -1,5 +1,6 @@
+use crate::pencil::{read_tgtb, StrokeThickness};
 use crate::read::ReadError;
-use crate::util::{read_encoded_data, Bytes, TbQuant};
+use crate::util::{read_encoded_data, Bytes};
 use byteorder::{ReadBytesExt, LE};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io::{self, Read};
@@ -68,7 +69,7 @@ pub struct ComponentInfo {
     pub color_id: Option<u64>,
 }
 
-pub type Point = (TbQuant, TbQuant);
+pub type Point = (f32, f32);
 
 #[derive(Debug, Clone)]
 pub struct Path {
@@ -151,8 +152,8 @@ impl Path {
 
         macro_rules! read_point {
             () => {{
-                let x = TbQuant(input.read_f32::<LE>()?);
-                let y = TbQuant(input.read_f32::<LE>()?);
+                let x = input.read_f32::<LE>()?;
+                let y = input.read_f32::<LE>()?;
                 (x, y)
             }};
         }
@@ -176,43 +177,6 @@ impl Path {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct StrokeThickness {
-    points: Vec<StrokeThicknessPoint>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StrokeThicknessPoint {
-    /// The location on the entire curve, from 0 to 1.
-    pub loc: TbQuant,
-    /// The left thickness side (in the drawing direction)
-    pub left: StrokeThicknessSide,
-    /// The right thickness side (in the drawing direction)
-    pub right: StrokeThicknessSide,
-}
-
-/// One side of a stroke thickness point.
-///
-/// The offset and the Y coordinate of control points specify a distance from the center line.
-///
-/// The X coordinate of control points ranges from 0 to 1, where 0 is directly on the current
-/// thickness point and 1 is directly on the next thickness point in that particular direction.
-///
-/// If this is an end point, however, things change:
-/// the control point in the direction of the end cap (e.g. control_back at the beginning) is now
-/// connected to the thickness point on the other side of the *same* thickness point.
-/// The X coordinate is now 1 if the control point is on the other side of the stroke, and the Y
-/// coordinate goes in the direction of the end cap.
-#[derive(Debug, Clone)]
-pub struct StrokeThicknessSide {
-    /// The offset from the center line.
-    pub offset: TbQuant,
-    /// The bézier control point in the backwards direction.
-    pub ctrl_back: Point,
-    /// The bézier control point in the forwards direction.
-    pub ctrl_fwd: Point,
-}
-
 // what does this mean?
 const LAYER_TRAILER: &[u8] = &[
     0x00, 0x54, 0x47, 0x52, 0x56, 0x08, 0x00, 0x00, 0x00, 0x3d, 0xdf, 0x4f, 0x8d,
@@ -223,6 +187,7 @@ where
     R: Read,
 {
     let data = read_encoded_data(&mut input)?;
+    println!("layer:\n{:?}", Bytes(data.clone()));
     let mut input = io::BufReader::new(io::Cursor::new(data));
 
     let data_type = input.read_u16::<LE>()?;
@@ -343,7 +308,12 @@ where
                                 }
                                 ComponentType::Pencil => {
                                     // pencil stroke
-                                    input.read_u32::<LE>()?;
+                                    let v = input.read_u32::<LE>()?;
+                                    if v != 0x41200000 {
+                                        return Err(ReadError::UnknownMystery(format!(
+                                            "unexpected bytes in TGSD pencil: {v:08x} (expected 41200000)",
+                                        )));
+                                    }
                                     Some(input.read_u64::<LE>()?)
                                 }
                             };
@@ -385,84 +355,8 @@ where
                         tags.push(ShapeComponentData::Path(Path::read(&mut input)?));
                     }
                     ShapeComponentTag::Tgtb => {
-                        let len = input.read_u32::<LE>()?;
-                        let mut input = (&mut input).take(len as u64);
-
-                        match input.read_u8()? {
-                            0x01 => (),
-                            byte => {
-                                return Err(ReadError::UnknownMystery(format!(
-                                    "unexpected tGTB first byte: {:02x?} (expected 01)",
-                                    byte,
-                                )))
-                            }
-                        }
-
-                        println!("tGTB second byte: {:02x?}", input.read_u8()?);
-
-                        let header: [u8; 5] = [0xff, 0xff, 0xff, 0xcf, 0x00];
-                        let mut header_read = [0; 5];
-                        input.read_exact(&mut header_read)?;
-                        if header != header_read {
-                            let mut rest = Vec::new();
-                            input.read_to_end(&mut rest)?;
-
-                            return Err(ReadError::UnknownMystery(format!(
-                                "unexpected tGTB header {:02x?} (rest: {:?})",
-                                header_read,
-                                Bytes(rest),
-                            )));
-                        }
-
-                        let point_count = input.read_u32::<LE>()?;
-                        let mut points = Vec::new();
-
-                        for _ in 0..point_count {
-                            let loc = TbQuant(input.read_f32::<LE>()?);
-                            let off_l = TbQuant(input.read_f32::<LE>()?);
-                            let lb_x = TbQuant(input.read_f32::<LE>()?);
-                            let lb_y = TbQuant(input.read_f32::<LE>()?);
-                            let lf_x = TbQuant(input.read_f32::<LE>()?);
-                            let lf_y = TbQuant(input.read_f32::<LE>()?);
-                            let off_r = TbQuant(input.read_f32::<LE>()?);
-                            let rb_x = TbQuant(input.read_f32::<LE>()?);
-                            let rb_y = TbQuant(input.read_f32::<LE>()?);
-                            let rf_x = TbQuant(input.read_f32::<LE>()?);
-                            let rf_y = TbQuant(input.read_f32::<LE>()?);
-
-                            points.push(StrokeThicknessPoint {
-                                loc,
-                                left: StrokeThicknessSide {
-                                    offset: off_l,
-                                    ctrl_back: (lb_x, lb_y),
-                                    ctrl_fwd: (lf_x, lf_y),
-                                },
-                                right: StrokeThicknessSide {
-                                    offset: off_r,
-                                    ctrl_back: (rb_x, rb_y),
-                                    ctrl_fwd: (rf_x, rf_y),
-                                },
-                            });
-                        }
-
-                        let trailer: [u8; 29] = [
-                            00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
-                            // this seems to be a float value that *can* change
-                            // but what does it mean...
-                            00, 00, 0x80, 0x3F,
-                            00, 00, 00, 00, 00, 00, 00, 00,
-                        ];
-                        let mut trailer_read = [0; 29];
-                        input.read_exact(&mut trailer_read)?;
-                        if trailer != trailer_read {
-                            println!("unexpected tGTB trailer {:?}", Bytes(trailer_read.to_vec()));
-                            /* return Err(ReadError::UnknownMystery(format!(
-                                "unexpected tGTB trailer {:02x?}",
-                                trailer_read,
-                            ))); */
-                        }
-
-                        tags.push(ShapeComponentData::Thickness(StrokeThickness { points }));
+                        let thickness = read_tgtb(&mut input)?;
+                        tags.push(ShapeComponentData::Thickness(thickness));
                     }
                     ShapeComponentTag::Tgti => {
                         let len = input.read_u32::<LE>()?;

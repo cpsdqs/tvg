@@ -1,3 +1,5 @@
+use tvg::read::FileData;
+
 fn main() {
     let mut args = std::env::args();
     args.next().expect("no exec arg");
@@ -13,6 +15,15 @@ fn main() {
     };
 
     for item in tvg {
-        println!("{:02x?}", item);
+        match item {
+            FileData::Main(items) => {
+                println!("<main>");
+                for item in items {
+                    println!("{item:02x?}");
+                }
+                println!("</main>");
+            }
+            item => println!("{item:02x?}"),
+        }
     }
 }
