@@ -1,7 +1,7 @@
-use crate::layer::{read_layer_data, LayerData};
-use crate::palette::{read_palette_data, PaletteData};
+use crate::layer::{LayerData, read_layer_data};
+use crate::palette::{PaletteData, read_palette_data};
 use crate::util::read_encoded_data;
-use byteorder::{ReadBytesExt, LE};
+use byteorder::{LE, ReadBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io::{self, BufRead, Read};
 use thiserror::Error;
@@ -72,6 +72,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u32)]
 pub enum FileTag {
     /// `CERT`: contains a certificate unique to the license
@@ -101,6 +102,7 @@ pub enum FileTag {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u32)]
 pub enum EncodingTag {
     /// `UNCO`: uncompressed data
@@ -110,6 +112,8 @@ pub enum EncodingTag {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "type", content = "content", rename_all = "snake_case"))]
 pub enum FileData {
     Certificate(String),
     Signature(Vec<u8>),
@@ -126,16 +130,6 @@ pub enum FileData {
     LayerLine(LayerData),
     LayerOverlay(LayerData),
     Palette(PaletteData),
-}
-
-#[derive(Debug, Clone)]
-pub enum ColorData {
-    ColorRgba(u8, u8, u8, u8),
-    ColorId {
-        id: u64,
-        name: String,
-        palette: String,
-    },
 }
 
 fn read_tags<R>(mut input: R) -> Result<Vec<FileData>, ReadError>

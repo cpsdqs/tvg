@@ -34,6 +34,7 @@ where
 
 /// Contains byte data (with appropriate debug formatting).
 #[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Bytes(pub Vec<u8>);
 
 impl std::fmt::Debug for Bytes {

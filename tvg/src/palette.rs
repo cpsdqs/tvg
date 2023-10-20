@@ -1,11 +1,12 @@
-use crate::read::{ColorData, ReadError};
+use crate::read::ReadError;
 use crate::util::read_encoded_data;
-use byteorder::{ReadBytesExt, LE};
+use byteorder::{LE, ReadBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io;
 use std::io::Read;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u32)]
 pub enum PaletteColorTag {
     /// `TCSC`: contains the color value
@@ -15,13 +16,27 @@ pub enum PaletteColorTag {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaletteData {
     pub colors: Vec<PaletteColor>,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaletteColor {
     pub tags: Vec<ColorData>,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "type", content = "content", rename_all = "snake_case"))]
+pub enum ColorData {
+    ColorRgba(u8, u8, u8, u8),
+    ColorId {
+        id: u64,
+        name: String,
+        palette: String,
+    },
 }
 
 pub fn read_palette_data<R>(mut input: R) -> Result<PaletteData, ReadError>

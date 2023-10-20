@@ -5,6 +5,7 @@ use byteorder::{ReadBytesExt, LE};
 use std::io::Read;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StrokeThickness {
     /// Optional definition of a new thickness path.
     pub definition: Option<Vec<StrokeThicknessPoint>>,
@@ -13,6 +14,7 @@ pub struct StrokeThickness {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StrokeThicknessPoint {
     /// The location on the entire curve, from 0 to 1.
     pub loc: f32,
@@ -35,6 +37,7 @@ pub struct StrokeThicknessPoint {
 /// The X coordinate is now 1 if the control point is on the other side of the stroke, and the Y
 /// coordinate goes in the direction of the end cap.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StrokeThicknessSide {
     /// The offset from the center line.
     pub offset: f32,

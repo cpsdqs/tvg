@@ -6,12 +6,16 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io::{self, Read};
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "type", content = "content", rename_all = "snake_case"))]
 pub enum LayerData {
     Empty,
     Vector(Vec<VectorShape>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[repr(u16)]
 pub enum ShapeType {
     Unknown0 = 0,
@@ -23,17 +27,21 @@ pub enum ShapeType {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VectorShape {
+    #[cfg_attr(feature = "serde", serde(rename = "type"))]
     pub ty: ShapeType,
     pub components: Vec<ShapeComponent>,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ShapeComponent {
     pub tags: Vec<ShapeComponentData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u32)]
 pub enum ShapeComponentTag {
     /// `TGSD`: seems to contain metadata
@@ -47,6 +55,8 @@ pub enum ShapeComponentTag {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "type", content = "content", rename_all = "snake_case"))]
 pub enum ShapeComponentData {
     Info(ComponentInfo),
     Path(Path),
@@ -55,6 +65,8 @@ pub enum ShapeComponentData {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[repr(u8)]
 pub enum ComponentType {
     Fill = 0,
@@ -64,7 +76,9 @@ pub enum ComponentType {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComponentInfo {
+    #[cfg_attr(feature = "serde", serde(rename = "type"))]
     pub ty: ComponentType,
     pub color_id: Option<u64>,
 }
@@ -72,17 +86,21 @@ pub struct ComponentInfo {
 pub type Point = (f32, f32);
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
     pub segments: Vec<PathSegment>,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "type", content = "content", rename_all = "snake_case"))]
 pub enum PathSegment {
     Line(Point),
     Cubic(Point, Point, Point),
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 enum PathSegmentType {
     Line,
     Cubic,
