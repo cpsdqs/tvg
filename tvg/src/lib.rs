@@ -1,3 +1,4 @@
+mod eof_reader;
 pub mod layer;
 pub mod palette;
 mod pencil;

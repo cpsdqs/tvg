@@ -26,11 +26,12 @@ class Palette {
     }
 }
 
+const INITIAL_SCALE = 0.1;
 export function CanvasView({ file }) {
     const viewNode = useRef();
     const [viewCenter, setViewCenter] = useState([0, 0]);
     const [viewOffset, setViewOffset] = useState([0, 0]);
-    const [viewScale, setViewScale] = useState(0.3);
+    const [viewScale, setViewScale] = useState(INITIAL_SCALE);
 
     const resetCenter = () => {
         if (viewNode) setViewCenter([viewNode.current.offsetWidth / 2, viewNode.current.offsetHeight / 2]);
@@ -56,6 +57,11 @@ export function CanvasView({ file }) {
         } else {
             setViewOffset([viewOffset[0] + e.deltaX, viewOffset[1] + e.deltaY]);
         }
+    };
+
+    const resetView = () => {
+        setViewOffset([0, 0]);
+        setViewScale(INITIAL_SCALE);
     };
 
     const main = file.find(item => item.type === 'main');
@@ -93,6 +99,9 @@ export function CanvasView({ file }) {
                     <${DrawingLayer} type="overlay" layer="${layers[3]}" palette=${palette} />
                 </g>
             </svg>
+            <div class="canvas-controls">
+                <button onClick=${resetView}>reset view</button>
+            </div>
         </div>
     `;
 }
@@ -193,6 +202,7 @@ function createThicknessPaths(data) {
     const rightLength = right.getTotalLength();
 
     return {
+        data,
         left,
         right,
         leftLength,
@@ -207,6 +217,20 @@ function StrokeShape({ shape, palette }) {
 
         let leftPoints = [];
         let rightPoints = [];
+
+        let firstPoint = [0, 0];
+        let firstTangent = [0, 0];
+        let hasFirstPoint = false;
+        let lastPoint = [0, 0];
+        let lastTangent = [0, 0];
+
+        const normalize = v => {
+            const len = Math.hypot(v[0], v[1]);
+            if (len > 0) {
+                v[0] /= len;
+                v[1] /= len;
+            }
+        };
 
         for (const component of shape.components) {
             let d = '';
@@ -229,15 +253,24 @@ function StrokeShape({ shape, palette }) {
             centerline.setAttribute('d', d);
             const centerlineLength = centerline.getTotalLength();
 
+            if (!hasFirstPoint) {
+                hasFirstPoint = true;
+                const p = centerline.getPointAtLength(0);
+                const p1 = centerline.getPointAtLength(0.1);
+                firstTangent = [p1.x - p.x, p1.y - p.y];
+                normalize(firstTangent);
+                firstPoint = [p.x, p.y];
+            }
+            {
+                const p = centerline.getPointAtLength(centerlineLength - 0.1);
+                const p1 = centerline.getPointAtLength(centerlineLength);
+                lastTangent = [p1.x - p.x, p1.y - p.y];
+                normalize(lastTangent);
+                lastPoint = [p1.x, p1.y];
+            }
+
             const toCenterlineT = t => {
                 return (t - thicknessDomain[0]) / (thicknessDomain[1] - thicknessDomain[0]);
-            };
-            const normalize = v => {
-                const len = Math.hypot(v[0], v[1]);
-                if (len > 0) {
-                    v[0] /= len;
-                    v[1] /= len;
-                }
             };
 
             const tIncrement = Math.min(1, 1 / centerlineLength);
@@ -254,7 +287,7 @@ function StrokeShape({ shape, palette }) {
                 const leftTP1 = centerline.getPointAtLength(leftT + 0.1);
                 const leftTan = [leftTP1.x - leftTP.x, leftTP1.y - leftTP.y];
                 normalize(leftTan);
-                const leftDir = [-leftTan[1], leftTan[0]];
+                const leftDir = [leftTan[1], -leftTan[0]];
 
                 const [leftX, leftY] = [
                     leftTP.x + leftDir[0] * leftPoint.y,
@@ -275,7 +308,7 @@ function StrokeShape({ shape, palette }) {
                 const rightTP1 = centerline.getPointAtLength(rightT + 0.1);
                 const rightTan = [rightTP1.x - rightTP.x, rightTP1.y - rightTP.y];
                 normalize(rightTan);
-                const rightDir = [rightTan[1], -rightTan[0]];
+                const rightDir = [-rightTan[1], rightTan[0]];
 
                 const [rightX, rightY] = [
                     rightTP.x + rightDir[0] * rightPoint.y,
@@ -291,8 +324,75 @@ function StrokeShape({ shape, palette }) {
             else d += ' L';
             d += p.toString();
         }
+
+        // create basic round caps
+        // some day we may know where these are stored in the TVG data
+        const endCapOffset = 1.33;
+
+        // end cap
+        if (thickness) {
+            const lastTP = thickness.data.at(-1);
+
+            if (lastTP) {
+                const leftDir = [lastTangent[1], -lastTangent[0]];
+                const rightDir = [-lastTangent[1], lastTangent[0]];
+
+                const startLeft = [
+                    lastPoint[0] + leftDir[0] * lastTP.left.offset,
+                    lastPoint[1] + leftDir[1] * lastTP.left.offset,
+                ];
+                const offsetLeft = endCapOffset * lastTP.left.offset;
+                const offsetRight = endCapOffset * lastTP.right.offset;
+                const fwdLeft = [
+                    lastPoint[0] + lastTangent[0] * offsetLeft + leftDir[0] * lastTP.left.ctrl_fwd[1],
+                    lastPoint[1] + lastTangent[1] * offsetLeft + leftDir[1] * lastTP.left.ctrl_fwd[1],
+                ];
+                const fwdRight = [
+                    lastPoint[0] + lastTangent[0] * offsetRight + rightDir[0] * lastTP.right.ctrl_fwd[1],
+                    lastPoint[1] + lastTangent[1] * offsetRight + rightDir[1] * lastTP.right.ctrl_fwd[1],
+                ];
+                const endRight = [
+                    lastPoint[0] + rightDir[0] * lastTP.right.offset,
+                    lastPoint[1] + rightDir[1] * lastTP.right.offset,
+                ];
+
+                d += ` L${startLeft} C${fwdLeft} ${fwdRight} ${endRight}`;
+            }
+        }
+
         for (const p of rightPoints.reverse()) {
             d += ' L' + p.toString();
+        }
+
+        // start cap
+        if (thickness) {
+            const firstTP = thickness.data[0];
+
+            if (firstTP) {
+                const leftDir = [firstTangent[1], -firstTangent[0]];
+                const rightDir = [-firstTangent[1], firstTangent[0]];
+
+                const startRight = [
+                    firstPoint[0] + rightDir[0] * firstTP.right.offset,
+                    firstPoint[1] + rightDir[1] * firstTP.right.offset,
+                ];
+                const offsetLeft = endCapOffset * firstTP.left.offset;
+                const offsetRight = endCapOffset * firstTP.right.offset;
+                const backRight = [
+                    firstPoint[0] - firstTangent[0] * offsetRight + rightDir[0] * firstTP.right.ctrl_back[1],
+                    firstPoint[1] - firstTangent[1] * offsetRight + rightDir[1] * firstTP.right.ctrl_back[1],
+                ];
+                const backLeft = [
+                    firstPoint[0] - firstTangent[0] * offsetLeft + leftDir[0] * firstTP.left.ctrl_back[1],
+                    firstPoint[1] - firstTangent[1] * offsetLeft + leftDir[1] * firstTP.left.ctrl_back[1],
+                ];
+                const endLeft = [
+                    firstPoint[0] + leftDir[0] * firstTP.left.offset,
+                    firstPoint[1] + leftDir[1] * firstTP.left.offset,
+                ];
+
+                d += ` L${startRight} C${backRight} ${backLeft} ${endLeft}`;
+            }
         }
 
         let fill = palette.getCssColor(color);

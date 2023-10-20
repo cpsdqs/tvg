@@ -29,6 +29,7 @@ function LoadFile({ onLoad }) {
     };
     const onDrop = (e) => {
         e.preventDefault();
+        setDraggingOver(false);
         const file = e.dataTransfer.files[0];
         if (!file) return;
 

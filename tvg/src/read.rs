@@ -5,6 +5,7 @@ use byteorder::{LE, ReadBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::io::{self, BufRead, Read};
 use thiserror::Error;
+use crate::eof_reader::EofReader;
 
 pub const MAGIC: [u8; 8] = *b"OTVGfull";
 pub const TVG_VERSION: u32 = 1009;
@@ -66,7 +67,7 @@ where
         )));
     }
 
-    let tags = read_tags(&mut input)?;
+    let tags = read_tags(&mut EofReader::new(input)?)?;
 
     Ok(tags)
 }
@@ -132,20 +133,22 @@ pub enum FileData {
     Palette(PaletteData),
 }
 
-fn read_tags<R>(mut input: R) -> Result<Vec<FileData>, ReadError>
-where
-    R: Read,
+fn read_tags<R: Read>(input: &mut EofReader<R>) -> Result<Vec<FileData>, ReadError>
 {
     let mut tags = Vec::new();
     loop {
-        match read_tag(&mut input) {
-            Ok(tag) => tags.push(tag),
-            Err(ReadError::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                // FIXME: distinguish unexpected EOF from EOF because the file ended
-                break Ok(tags);
-            }
-            Err(e) => break Err(e),
+        if input.is_at_eof() {
+            break Ok(tags);
         }
+
+        let mut peek_buf = [0; 4];
+        let read = input.peek_tag(&mut peek_buf)?;
+        if read == 1 && peek_buf[0] == 0 {
+            // trailing 0 byte at EOF
+            break Ok(tags);
+        }
+
+        tags.push(read_tag(&mut *input)?);
     }
 }
 
@@ -180,7 +183,7 @@ where
         }
         Ok(FileTag::MainData) => {
             let data = read_encoded_data(&mut input)?;
-            Ok(FileData::Main(read_tags(io::Cursor::new(data))?))
+            Ok(FileData::Main(read_tags(&mut EofReader::new(io::Cursor::new(data))?)?))
         }
         Ok(FileTag::Endt) => Ok(FileData::Endt),
         Ok(FileTag::Crea) => {

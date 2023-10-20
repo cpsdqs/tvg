@@ -106,17 +106,13 @@ pub fn read_tgtb(input: &mut impl Read) -> Result<StrokeThickness, ReadError> {
         0x01 => {
             // defines a thickness path
 
-            let header: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0xcf, 0x00];
-            let mut header_read = [0; 6];
-            input.read_exact(&mut header_read)?;
-            if header != header_read {
-                let mut rest = Vec::new();
-                input.read_to_end(&mut rest)?;
-
+            // probably??
+            let _some_kind_of_id = input.read_u32::<LE>()?;
+            let cf = input.read_u16::<LE>()?;
+            if cf != 0xCF {
                 return Err(ReadError::UnknownMystery(format!(
-                    "unexpected tGTB definition header: {:02x?} (rest: {:?})",
-                    header_read,
-                    Bytes(rest),
+                    "unexpected mystery value in tGTB definition: {:02x?} (expected CF)",
+                    cf,
                 )));
             }
 
