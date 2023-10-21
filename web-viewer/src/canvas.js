@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { html } from 'htm/preact';
+import { selectionContext, shapeVizContext } from './ctx.js';
+
+// harmony reference grid cell size
+const GRID_X = 208.328125;
+const GRID_Y = 156.25;
 
 class Palette {
     colors = new Map();
@@ -32,6 +37,8 @@ export function CanvasView({ file }) {
     const [viewCenter, setViewCenter] = useState([0, 0]);
     const [viewOffset, setViewOffset] = useState([0, 0]);
     const [viewScale, setViewScale] = useState(INITIAL_SCALE);
+    const [cursorPos, setCursorPos] = useState([0, 0]);
+    const [showAux, setShowAux] = useState(true);
 
     const resetCenter = () => {
         if (viewNode) setViewCenter([viewNode.current.offsetWidth / 2, viewNode.current.offsetHeight / 2]);
@@ -58,10 +65,17 @@ export function CanvasView({ file }) {
             setViewOffset([viewOffset[0] + e.deltaX, viewOffset[1] + e.deltaY]);
         }
     };
+    const onPointerMove = (e) => {
+        const viewRect = viewNode.current.getBoundingClientRect();
+        setCursorPos([e.clientX - viewRect.left, e.clientY - viewRect.top]);
+    };
 
     const resetView = () => {
         setViewOffset([0, 0]);
         setViewScale(INITIAL_SCALE);
+    };
+    const toggleAux = () => {
+        setShowAux(!showAux);
     };
 
     const main = file.find(item => item.type === 'main');
@@ -76,15 +90,30 @@ export function CanvasView({ file }) {
 
     const palette = useMemo(() => new Palette(main.content.find(item => item.type === 'palette')?.content), [file]);
 
+    let infoText = '';
+    {
+        const cursorPosX = (cursorPos[0] - viewCenter[0] + viewOffset[0]) / viewScale;
+        const cursorPosY = -(cursorPos[1] - viewCenter[1] + viewOffset[1]) / viewScale;
+        const xDir = cursorPosX >= 0 ? 'E' : 'W';
+        const yDir = cursorPosY >= 0 ? 'N' : 'S';
+
+        infoText += [
+            `x: ${cursorPosX.toFixed(3)}`,
+            `y: ${cursorPosY.toFixed(3)}`,
+            '/',
+            `${(cursorPosX / GRID_X).toFixed(2)} ${xDir}`,
+            `${(cursorPosY / GRID_Y).toFixed(2)} ${yDir}`,
+        ].join(' ');
+    }
+
     return html`
         <div
             class="canvas-view"
             ref=${viewNode}
             onWheel=${onWheel}
+            onPointerMove=${onPointerMove}
         >
-            <svg
-                class="rendered"
-            >
+            <svg class="rendered ${!showAux ? 'hide-aux' : ''}">
                 <g style=${{
                     transform: `translate(${
                         viewCenter[0] - viewOffset[0]
@@ -97,44 +126,77 @@ export function CanvasView({ file }) {
                     <${DrawingLayer} type="color" layer="${layers[1]}" palette=${palette} />
                     <${DrawingLayer} type="line" layer="${layers[2]}" palette=${palette} />
                     <${DrawingLayer} type="overlay" layer="${layers[3]}" palette=${palette} />
+                    <${ShapeViz} />
                 </g>
             </svg>
             <div class="canvas-controls">
                 <button onClick=${resetView}>reset view</button>
+                <button onClick=${toggleAux}>${showAux ? 'hide data' : 'show data'}</button>
+            </div>
+            <div class="canvas-info">
+                ${infoText}
             </div>
         </div>
     `;
 }
 
 function AxesAndFrame() {
-    // eyeballed 16:9 frame from harmony
-    return html`
-        <g>
-            <line x1="-3333" x2="3333" y1="0" y2="0" stroke="#f00" stroke-width="5" />
-            <line y1="-1875" y2="1875" x1="0" x2="0" stroke="#0f0" stroke-width="5" />
-            <rect x="-3333" y="-1875" width="6666" height="3750" fill="none" stroke="#0007" stroke-width="5" />
-        </g>
-    `;
+    return useMemo(() => {
+        // eyeballed 16:9 frame and grid from harmony
+
+        const gridLines = [];
+        for (let i = 1; i <= 12; i++) {
+            gridLines.push(html`
+                <line x1=${-GRID_X * 12} x2=${GRID_X * 12} y1=${GRID_Y * i} y2=${GRID_Y * i} stroke="#0007" />
+            `);
+            gridLines.push(html`
+                <line x1=${-GRID_X * 12} x2=${GRID_X * 12} y1=${-GRID_Y * i} y2=${-GRID_Y * i} stroke="#0007" />
+            `);
+            gridLines.push(html`
+                <line y1=${-GRID_Y * 12} y2=${GRID_Y * 12} x1=${GRID_X * i} x2=${GRID_X * i} stroke="#0007" />
+            `);
+            gridLines.push(html`
+                <line y1=${-GRID_Y * 12} y2=${GRID_Y * 12} x1=${-GRID_X * i} x2=${-GRID_X * i} stroke="#0007" />
+            `);
+        }
+
+        return html`
+            <g>
+                ${gridLines}
+                <line x1="-3333.333" x2="3333.333" y1="0" y2="0" stroke="#f00" stroke-width="5" />
+                <line y1="-1875" y2="1875" x1="0" x2="0" stroke="#0f0" stroke-width="5" />
+                <rect x="-3333" y="-1875" width="6666" height="3750" fill="none" stroke="#0007" stroke-width="5" />
+            </g>
+        `;
+    }, []);
 }
 
 function DrawingLayer({ type, layer, palette }) {
-    if (!layer || layer.type !== 'vector') return null;
+    const sel = useContext(selectionContext);
+    return useMemo(() => {
+        if (!layer || layer.type !== 'vector') return null;
 
-    const items = [];
-    for (let i = 0; i < layer.content.length; i++) {
-        const shape = layer.content[i];
-        if (shape.type === 'fill') {
-            items.push(html`<${FillShape} key=${i} shape=${shape} palette=${palette} />`);
-        } else if (shape.type === 'stroke') {
-            items.push(html`<${StrokeShape} key=${i} shape=${shape} palette=${palette} />`);
+        const items = [];
+        for (let i = 0; i < layer.content.length; i++) {
+            const shape = layer.content[i];
+            const id = [type, i].join('/');
+            const isHovering = sel.hovering === id;
+            const isSelected = sel.selected === id;
+            const props = { key: i, isHovering, isSelected, shape, palette };
+
+            if (shape.type === 'fill') {
+                items.push(html`<${FillShape} ...${props} />`);
+            } else if (shape.type === 'stroke' || shape.type === 'line') {
+                items.push(html`<${StrokeShape} ...${props} />`);
+            }
         }
-    }
 
-    return html`
-        <g class="layer-${type}" fill-rule="evenodd">
-            ${items}
-        </g>
-    `;
+        return html`
+            <g class="layer-${type}" fill-rule="evenodd">
+                ${items}
+            </g>
+        `;
+    }, [sel.selected, sel.hovering, type, layer, palette]);
 }
 
 function mapCoord([x, y]) {
@@ -156,21 +218,30 @@ function pathSegmentsToSvgData(segments) {
     return d;
 }
 
-function FillShape({ shape, palette }) {
-    let color = null;
-    let d = '';
-    for (const component of shape.components) {
-        for (const tag of component.tags) {
-            if (tag.type === 'info') {
-                if (tag.content.color_id) color = tag.content.color_id;
-            } else if (tag.type === 'path') {
-                d += pathSegmentsToSvgData(tag.content.segments);
+function FillShape({ shape, palette, isHovering, isSelected }) {
+    const [color, d] = useMemo(() => {
+        let color = null;
+        let d = '';
+        for (const component of shape.components) {
+            for (const tag of component.tags) {
+                if (tag.type === 'info') {
+                    if (tag.content.color_id) color = tag.content.color_id;
+                } else if (tag.type === 'path') {
+                    d += pathSegmentsToSvgData(tag.content.segments);
+                }
             }
         }
-    }
+        return [color, d];
+    }, [shape, palette]);
 
     let fill = palette.getCssColor(color);
-    return html`<path d=${d} fill=${fill} />`;
+    return html`
+        <path
+            class="fill-shape ${isHovering ? 'is-hovering' : ''} ${isSelected ? 'is-selected' : ''}"
+            d=${d}
+            fill=${fill}
+        />
+    `;
 }
 
 function createThicknessPaths(data) {
@@ -210,8 +281,8 @@ function createThicknessPaths(data) {
     };
 }
 
-function StrokeShape({ shape, palette }) {
-    return useMemo(() => {
+function StrokeShape({ shape, palette, isHovering, isSelected }) {
+    const [d, fill, centerLineD] = useMemo(() => {
         let color = null;
         let thickness = null;
 
@@ -232,6 +303,8 @@ function StrokeShape({ shape, palette }) {
             }
         };
 
+        let centerLineD = '';
+
         for (const component of shape.components) {
             let d = '';
             let thicknessDomain = [0, 1];
@@ -246,6 +319,8 @@ function StrokeShape({ shape, palette }) {
                     thicknessDomain = tag.content.domain;
                 }
             }
+
+            centerLineD += d;
 
             if (!thickness) continue;
 
@@ -396,6 +471,42 @@ function StrokeShape({ shape, palette }) {
         }
 
         let fill = palette.getCssColor(color);
-        return html`<path d=${d} fill=${fill} />`;
+
+        return [d, fill, centerLineD];
     }, [shape, palette]);
+
+    return html`
+        <g class="pencil ${isHovering ? 'is-hovering' : ''} ${isSelected ? 'is-selected' : ''}">
+            <path class="pencil-outline" d=${d} fill=${fill} fill-rule="nonzero" />
+            <path
+                class="pencil-center-line aux"
+                d=${centerLineD}
+                fill="none"
+                stroke="var(--accent)"
+            />
+        </g>
+    `;
+}
+
+function ShapeViz() {
+    const shapeViz = useContext(shapeVizContext);
+    if (shapeViz.type === 'point') {
+        const [x, vy] = shapeViz.value;
+        const y = -vy;
+        return html`
+            <g class="shape-viz-point">
+                <circle
+                    class="inner-point"
+                    cx=${x}
+                    cy=${y}
+                    r="1"
+                />
+                <line class="target-line" x1=${x - 5} x2=${x - 25} y1=${y} y2=${y} />
+                <line class="target-line" x1=${x + 5} x2=${x + 25} y1=${y} y2=${y} />
+                <line class="target-line" x1=${x} x2=${x} y1=${y - 5} y2=${y - 25} />
+                <line class="target-line" x1=${x} x2=${x} y1=${y + 5} y2=${y + 25} />
+            </g>
+        `;
+    }
+    return null;
 }

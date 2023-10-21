@@ -328,9 +328,11 @@ where
                                     // pencil stroke
                                     let v = input.read_u32::<LE>()?;
                                     if v != 0x41200000 {
-                                        return Err(ReadError::UnknownMystery(format!(
+                                        // TODO: figure out what this means
+                                        // (maybe some kind of ID, because it does not seem important for the data)
+                                        /*return Err(ReadError::UnknownMystery(format!(
                                             "unexpected bytes in TGSD pencil: {v:08x} (expected 41200000)",
-                                        )));
+                                        )));*/
                                     }
                                     Some(input.read_u64::<LE>()?)
                                 }

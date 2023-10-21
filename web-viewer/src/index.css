@@ -5,7 +5,12 @@ html, body {
     margin: 0;
 
     --card-bg: #eee;
+    --card2-bg: #ddd;
     --spoilered: #aaa;
+    --accent: #fa0;
+    --accent-hover: #9d0;
+    --accent-select: #0d9;
+    --shade: #0001;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -13,7 +18,11 @@ html, body {
         color-scheme: dark;
         background: #333;
         --card-bg: #222;
+        --card2-bg: #111;
         --spoilered: #555;
+        --accent-hover: #af0;
+        --accent-select: #0fa;
+        --shade: #fff1;
     }
 }
 
@@ -76,12 +85,81 @@ html, body {
     > svg.rendered {
         width: 100%;
         height: 100%;
+
+        &.hide-aux {
+            .aux {
+                display: none;
+            }
+        }
+
+        .fill-shape {
+            &.is-hovering {
+                stroke: var(--accent-hover);
+                stroke-width: 2px;
+            }
+            &.is-selected {
+                stroke: var(--accent-select);
+                stroke-width: 2px;
+            }
+        }
+        .pencil {
+            .pencil-outline {
+                stroke-width: 0;
+            }
+            .pencil-center-line {
+                stroke-width: 1px;
+                stroke-dasharray: 2 2;
+            }
+
+            &.is-hovering {
+                .pencil-outline {
+                    stroke: var(--accent-hover);
+                    stroke-width: 2px;
+                }
+                .pencil-center-line {
+                    display: initial;
+                    stroke: var(--accent-hover);
+                }
+            }
+            &.is-selected {
+                .pencil-outline {
+                    stroke: var(--accent-select);
+                }
+                .pencil-center-line {
+                    display: initial;
+                    stroke: var(--accent-select);
+                    stroke-width: 2px;
+                }
+            }
+        }
+
+        .shape-viz-point {
+            .inner-point {
+                fill: var(--accent-hover);
+            }
+            .target-line {
+                stroke: var(--accent-hover);
+                stroke-width: 2px;
+            }
+        }
     }
 
     > .canvas-controls {
         position: absolute;
+        display: flex;
         top: 0.5em;
         left: 0.5em;
+        gap: 0.5em;
+    }
+    > .canvas-info {
+        position: absolute;
+        left: 0.5em;
+        bottom: 0.5em;
+        background: #0007;
+        color: #fff;
+        padding: 0.3em;
+        border-radius: 0.5em;
+        font-feature-settings: 'tnum' 1;
     }
 }
 
@@ -175,6 +253,121 @@ html, body {
                     padding: 0.5em;
                 }
             }
+        }
+    }
+}
+
+
+.layer-data {
+    margin: 0.5em;
+    background: var(--card-bg);
+    border-radius: 0.5em;
+
+    > .header {
+        padding: 0.5em;
+        display: flex;
+        justify-content: space-between;
+
+        > .label {
+            font-weight: bold;
+        }
+    }
+}
+.layer-data .vector-shape {
+    margin: 0.1em 0;
+    background: var(--card2-bg);
+
+    > .header {
+        display: flex;
+
+        &::-webkit-details-marker {
+            display: none;
+        }
+        list-style: none;
+
+        &.is-hovering {
+            box-shadow: inset 0 0 0 2px var(--accent-hover);
+        }
+        &.is-selected {
+            box-shadow: inset 0 0 0 2px var(--accent-select);
+        }
+
+        > .disclosure {
+            padding: 0.1em 0.5em;
+            cursor: default;
+        }
+
+        > .inner {
+            padding: 0.1em 0.5em;
+            margin: 0;
+            border: none;
+            background: none;
+            color: inherit;
+            font: inherit;
+            display: flex;
+            flex: 1;
+            justify-content: space-between;
+
+            > .label {
+                font-weight: bold;
+            }
+
+            > .detail {
+                font-feature-settings: 'tnum' 1;
+            }
+        }
+    }
+
+    .vector-shape-component {
+        margin: 0.2em;
+        padding: 0.2em;
+        border-radius: 0.2em;
+        border: 1px solid;
+    }
+
+    .component-tag.is-info {
+        display: flex;
+        justify-content: space-between;
+
+        > .type {
+            font-weight: bold;
+        }
+        > .color-id {
+            font-size: smaller;
+        }
+    }
+    .component-tag.is-path {
+        > .path-segment {
+            border-top: 1px solid;
+            padding: 0.1em 0;
+            padding-left: 2em;
+
+            .segment-type {
+                display: inline-block;
+                text-align: center;
+                font-weight: bolder;
+                margin-left: -2em;
+                width: 1.5em;
+                margin-right: 0.5em;
+            }
+        }
+    }
+
+    .absolute-point {
+        background: var(--shade);
+        padding: 0.1em;
+        border-radius: 0.5em;
+        display: inline-flex;
+        font-feature-settings: 'tnum' 1;
+        width: 100%;
+        gap: 0.3em;
+
+        > .coord {
+            flex: 1;
+        }
+
+        &.is-viz {
+            box-shadow: inset 0 0 0 2px var(--accent-hover);
         }
     }
 }

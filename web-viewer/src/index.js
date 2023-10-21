@@ -1,10 +1,12 @@
 import { render } from 'preact';
-import { useRef, useState } from 'preact/hooks';
+import { useMemo, useRef, useState } from 'preact/hooks';
 import { html } from 'htm/preact';
 import { decode } from 'msgpackr';
 import initWasm, { readTVG } from '../tvg-wasm-out/tvg_wasm.js';
 import { FileMetadata } from './metadata.js';
 import { CanvasView } from './canvas.js';
+import { LayerDataViewer } from './layer-data.js';
+import { selectionContext, shapeVizContext } from './ctx.js';
 
 function LoadFile({ onLoad }) {
     const fileInput = useRef();
@@ -20,7 +22,7 @@ function LoadFile({ onLoad }) {
         fr.onload = () => {
             onLoad(fr.result);
             fileInput.current.value = null;
-        }
+        };
         fr.onerror = () => {
             alert('error reading file');
             fileInput.current.value = null;
@@ -65,14 +67,36 @@ function LoadFile({ onLoad }) {
 }
 
 function Tvg({ file }) {
+    const [hovering, setHovering] = useState(null);
+    const [selected, setSelected] = useState(null);
+    const selection = useMemo(() => ({
+        selected,
+        hovering,
+        setSelected,
+        setHovering,
+    }), [hovering, selected]);
+
+    const [shapeViz, setShapeViz] = useState(null);
+    const shapeVizCtx = useMemo(() => ({
+        type: shapeViz?.type,
+        value: shapeViz?.value,
+        set: (type, value) => setShapeViz({ type, value }),
+        clear: () => setShapeViz(null),
+    }), [shapeViz]);
+
     return html`
         <div class="tvg-file">
-            <div class="side-panel">
-                <${FileMetadata} file=${file} />
-            </div>
-            <div class="canvas-container">
-                <${CanvasView} file=${file} />
-            </div>
+            <${selectionContext.Provider} value=${selection}>
+                <${shapeVizContext.Provider} value=${shapeVizCtx}>
+                    <div class="side-panel">
+                        <${LayerDataViewer} file=${file} />
+                        <${FileMetadata} file=${file} />
+                    </div>
+                    <div class="canvas-container">
+                        <${CanvasView} file=${file} />
+                    </div>
+                </${shapeVizContext.Provider}>
+            </${selectionContext.Provider}>
         </div>
     `;
 }
@@ -84,11 +108,15 @@ function Main() {
     const onLoad = async (data) => {
         try {
             await initWasm();
+
+            const t0 = Date.now();
             const fileData = readTVG(new Uint8Array(data));
+            const t1 = Date.now();
+
             const tvg = decode(fileData);
             console.log('read file', tvg);
             setTvg(tvg);
-            setStatusText('file loaded');
+            setStatusText(`file loaded in ${t1 - t0} ms`);
         } catch (err) {
             console.error(err);
             setStatusText(err.toString());

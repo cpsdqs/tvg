@@ -78,36 +78,19 @@ pub fn read_tgtb(input: &mut impl Read) -> Result<StrokeThickness, ReadError> {
 
     let mut input = input.take(len as u64);
 
-    match input.read_u8()? {
+    let defn_type = input.read_u8()?;
+
+    // probably??
+    let _some_kind_of_id = input.read_u32::<LE>()?;
+
+    let definition = match defn_type {
         0x00 => {
             // uses a previously defined thickness path
-
-            let header: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
-            let mut header_read = [0; 4];
-            input.read_exact(&mut header_read)?;
-            if header != header_read {
-                let mut rest = Vec::new();
-                input.read_to_end(&mut rest)?;
-
-                return Err(ReadError::UnknownMystery(format!(
-                    "unexpected tGTB use header: {:02x?} (rest: {:?})",
-                    header_read,
-                    Bytes(rest),
-                )));
-            }
-
-            let domain = read_tgtb_domain(&mut input)?;
-
-            Ok(StrokeThickness {
-                definition: None,
-                domain,
-            })
+            None
         }
         0x01 => {
             // defines a thickness path
 
-            // probably??
-            let _some_kind_of_id = input.read_u32::<LE>()?;
             let cf = input.read_u16::<LE>()?;
             if cf != 0xCF {
                 return Err(ReadError::UnknownMystery(format!(
@@ -157,16 +140,17 @@ pub fn read_tgtb(input: &mut impl Read) -> Result<StrokeThickness, ReadError> {
                 )));
             }
 
-            let domain = read_tgtb_domain(&mut input)?;
-
-            Ok(StrokeThickness {
-                definition: Some(points),
-                domain,
-            })
+            Some(points)
         }
-        byte => Err(ReadError::UnknownMystery(format!(
-            "unknown tGTB type: {:02x?}",
-            byte,
-        ))),
-    }
+        byte => {
+            return Err(ReadError::UnknownMystery(format!(
+                "unknown tGTB type: {:02x?}",
+                byte,
+            )))
+        }
+    };
+
+    let domain = read_tgtb_domain(&mut input)?;
+
+    Ok(StrokeThickness { definition, domain })
 }

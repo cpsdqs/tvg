@@ -22,11 +22,13 @@ impl<R: Read> EofReader<R> {
         reader.fill_if_needed()?;
         Ok(reader)
     }
+
     fn fill_if_needed(&mut self) -> io::Result<()> {
         if self.at_eof {
             return Ok(());
         }
 
+        // discard the first half of the buffer if we can
         if self.buf_pos >= PEEK_BUF_HALF_SIZE {
             let (a, b) = self.buf.split_at_mut(PEEK_BUF_HALF_SIZE);
             a.copy_from_slice(b);
@@ -34,7 +36,8 @@ impl<R: Read> EofReader<R> {
             self.buf_read_pos -= PEEK_BUF_HALF_SIZE;
         }
 
-        if self.buf_read_pos <= PEEK_BUF_HALF_SIZE {
+        // buffer more bytes
+        if self.buf_read_pos < PEEK_BUF_SIZE {
             let read_count = self.read.read(&mut self.buf[self.buf_read_pos..])?;
             if read_count == 0 {
                 self.at_eof = true;
@@ -46,10 +49,12 @@ impl<R: Read> EofReader<R> {
         Ok(())
     }
 
+    /// Returns true if no more bytes can be read.
     pub fn is_at_eof(&self) -> bool {
         self.buf_pos == self.buf_read_pos && self.at_eof
     }
 
+    /// Peeks at least two (unless at EOF) and up to four bytes.
     pub fn peek_tag(&mut self, buf: &mut [u8; 4]) -> io::Result<usize> {
         // fill twice (once here, once in read) so that it must have at least 2 bytes available
         self.fill_if_needed()?;

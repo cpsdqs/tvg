@@ -5,16 +5,16 @@ export function FileMetadata({ file }) {
     return html`
         <div class="file-metadata">
             <div class="metadata-item">
+                <div class="item-title">palette</div>
+                <${FilePalette} file=${file} />
+            </div>
+            <div class="metadata-item">
                 <div class="item-title">certificate</div>
                 <${FileCertificate} file=${file} />
             </div>
             <div class="metadata-item">
                 <div class="item-title">identity</div>
                 <${FileIdentity} file=${file} />
-            </div>
-            <div class="metadata-item">
-                <div class="item-title">palette</div>
-                <${FilePalette} file=${file} />
             </div>
             <div class="metadata-item">
                 <div class="item-title">signature</div>
